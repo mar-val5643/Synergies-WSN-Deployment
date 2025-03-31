@@ -40,6 +40,7 @@ services:
       wsn-bridge:
         aliases:
         - oh
+      my_network:
 
   influxdb:
     image: influxdb:1.8
@@ -89,3 +90,5 @@ volumes:
 networks:
   wsn-bridge:
     driver: bridge
+  my_network:
+    external: true
