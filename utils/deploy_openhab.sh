@@ -8,7 +8,7 @@ echo "Setting up openHAB..."
 echo "Continue with the rest of the deployment process ..."
 
 # Running docker compose
-sudo ../pythonvenv/bin/docker-compose --env-file ../config.env up --build -d
+sudo ../pythonvenv/bin/docker-compose --env-file ../config.env up --build --no-cache -d
 
 echo -n "openHAB is not running yet. Waiting"
 # Wait for OpenHAB to start
