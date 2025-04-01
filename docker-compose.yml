@@ -42,6 +42,7 @@ services:
         - oh
       my_network:
 
+
   influxdb:
     image: influxdb:1.8
     container_name: influxdb
@@ -92,3 +93,4 @@ networks:
     driver: bridge
   my_network:
     external: true
+    ipv4_address: 172.21.0.3  # Static IP address
