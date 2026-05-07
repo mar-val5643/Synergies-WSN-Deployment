@@ -3,7 +3,7 @@
 # Script to automate the installation and setup of the openHAB platform and utilities
 
 # Main script starts here
-source ../config.env
+source ./config.env
 
 cd utils || { echo "Error - No utils folder"; exit 1; }
 chmod +x install_dependencies.sh
@@ -14,7 +14,7 @@ chmod +x console_command.sh
 # Execute the separate scripts for each task
 ./install_dependencies.sh
 
-./deploy_openhab.sh $site_id
+./deploy_openhab.sh 
 #./perform_operational_checks.sh  # skipped
 
 # Source the config.env file to load the variables
