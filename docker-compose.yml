@@ -2,10 +2,8 @@ version: '3.9'
 
 services:
   openhab:
-    image: openhab/openhab:4.1.1
+    image: openhab/openhab:5.1.4
     container_name: openhab
-    profiles:
-      - core
     ports:
       - ${OPENHAB_HTTP_PORT}:${OPENHAB_HTTP_PORT}
       - ${OPENHAB_HTTPS_PORT}:${OPENHAB_HTTPS_PORT}
@@ -46,8 +44,6 @@ services:
   influxdb:
     image: influxdb:1.8
     container_name: influxdb
-    profiles:
-      - core
     restart: always
     volumes:
       - data_influxdb:/var/lib/influxdb
@@ -70,59 +66,86 @@ services:
         aliases:
         - db
 
-  data-app:
-    build:
-      context: .
-      dockerfile: data_app/Dockerfile
-    container_name: app
-    profiles:
-      - core
+  mqtt-broker:
+    image: eclipse-mosquitto:latest
+    container_name: mqtt-broker
     restart: always
     ports:
-      - 5000:5000
+      - 1883:1883
+    volumes:
+      - ./configs/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - data_mosquitto:/mosquitto/data
+      - data_mosquitto_log:/mosquitto/log
     networks:
       wsn-bridge:
         aliases:
-          - app
-
+        - mqtt
+        
   edge-agent:
+    profiles: ["edge"]
     build:
-      context: ./edge_agent
-      dockerfile: Dockerfile
-    image: synergies/openhab-edge-agent:latest
+      context: .
+      dockerfile: edge_agent/Dockerfile
     container_name: edge-agent
-    profiles:
-      - edge
     restart: unless-stopped
-    env_file:
-      - ./edge_agent/.env
     depends_on:
       - openhab
-    secrets:
-      - mqtt_ca
-      - mqtt_client_crt
-      - mqtt_client_key
+      - mqtt-broker
     volumes:
-      - /etc/ssl/certs:/etc/ssl/certs:ro
+      - ./configs/edge_agent_config.yaml:/app/config.yaml:ro
+    environment:
+      - SITE_ID=${SITE_ID}
+      - MQTT_HOST=${MQTT_HOST}   
+      - MQTT_PORT=${MQTT_PORT}
+      - MQTT_TLS=${MQTT_TLS}
+      - MQTT_USERNAME=${MQTT_USERNAME} 
+      - MQTT_PASSWORD=${MQTT_PASSWORD} 
+      - MQTT_COMMAND_TOPIC=openhab/${SITE_ID}/command
+      - MQTT_RESPONSE_TOPIC=openhab/${SITE_ID}/response
+      - MQTT_STATUS_TOPIC=openhab/${SITE_ID}/status
+      - MQTT_DATA_TOPIC=openhab/${SITE_ID}/data
+      - OH_BASE_URL=http://oh:8080
+      - OH_TOKEN=${OH_TOKEN}
+      - TELEMETRY_INTERVAL_SEC=60
+      - HEARTBEAT_INTERVAL_SEC=30
+      - TZ=${TZ}
+#    secrets:
+#      - mqtt_ca
+#      - mqtt_client_crt
+#      - mqtt_client_key
+#    volumes:
+#      - /etc/ssl/certs:/etc/ssl/certs:ro
     networks:
       wsn-bridge:
         aliases:
           - edge-agent
 
   openhab-exporter:
+    profiles: ["edge"]
     build:
       context: .
       dockerfile: openhab_exporter/Dockerfile
     container_name: openhab-exporter
-    profiles:
-      - edge
     restart: always
-    env_file:
-      - ./openhab_exporter/.env
     depends_on:
       - openhab
+      - mqtt-broker
     volumes:
-      - ./ID:/data/site/ID:ro
+      - ./configs/exporter_config.yaml:/app/config.yaml:ro
+    environment:
+      - TZ=${TZ}
+      - SITE_ID=${SITE_ID}
+      - OH_TOKEN=${OH_TOKEN}
+      - OH_BASE_URL=http://oh:8080
+      - MQTT_HOST=${MQTT_HOST}    
+      - MQTT_PORT=${MQTT_PORT}    
+      - MQTT_TLS=${MQTT_TLS} 
+      - MQTT_USERNAME=${MQTT_USERNAME} 
+      - MQTT_PASSWORD=${MQTT_PASSWORD}          
+#    secrets:
+#      - mqtt_ca
+#      - mqtt_client_crt
+#      - mqtt_client_key
     networks:
       wsn-bridge:
         aliases:
@@ -134,15 +157,16 @@ volumes:
   data_openhab_userdata:
   data_influxdb:
   data_influxdb_config:
-
-secrets:
-  mqtt_ca:
-    file: ./edge_agent/secrets/ca.crt
-  mqtt_client_crt:
-    file: ./edge_agent/secrets/client.crt
-  mqtt_client_key:
-    file: ./edge_agent/secrets/client.key
+  data_mosquitto:
+  data_mosquitto_log:
 
 networks:
   wsn-bridge:
     driver: bridge
+#secrets:
+#  mqtt_ca:
+#    file: ./secrets/ca.crt
+#  mqtt_client_crt:
+#    file: ./secrets/client.crt
+#  mqtt_client_key:
+#    file: ./secrets/client.key
