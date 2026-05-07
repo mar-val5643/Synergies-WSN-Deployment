@@ -18,6 +18,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
+import paho.mqtt.client as mqtt
 
 import requests
 from requests import Response, Session
@@ -48,23 +49,10 @@ def _current_ts() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _load_site_id(site_id_env: Optional[str], site_id_file: Optional[str]) -> Optional[str]:
+def _load_site_id(site_id_env: Optional[str]) -> Optional[str]:
     if site_id_env:
         return site_id_env.strip() or None
-
-    if site_id_file:
-        path = Path(site_id_file)
-        if path.exists():
-            try:
-                return path.read_text(encoding="utf-8").strip() or None
-            except OSError as exc:
-                LOGGER.error("Failed to read site_id file %s: %s", path, exc)
     return None
-
-
-def _default_site_id_path() -> str:
-    return "/data/site/ID"
-
 
 def _merge_dict(base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
     merged = dict(base)
@@ -109,9 +97,7 @@ class OpenHABClient:
         if not self.persistence_service:
             return None
 
-        params = {
-            "pageSize": 1,
-        }
+        params = {"pageSize": 1}
         if self.persistence_service:
             params["serviceId"] = self.persistence_service
 
@@ -142,29 +128,20 @@ class Exporter:
         self,
         site_id: Optional[str],
         client: OpenHABClient,
-        remote_url: str,
         interval: float,
-        timeout: float,
-        api_key: Optional[str],
-        max_retries: int,
+        mqtt_host: str,
+        mqtt_port: int,
+        mqtt_user: Optional[str] = None,
+        mqtt_pass: Optional[str] = None,
     ) -> None:
         self.site_id = site_id
         self.client = client
-        self.remote_url = remote_url
         self.interval = interval
-        self.timeout = timeout
-        self.api_key = api_key
-        self.max_retries = max_retries
-        self.session = requests.Session()
-
-    def _build_headers(self) -> Dict[str, str]:
-        headers = {
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        if self.api_key:
-            headers["X-API-Key"] = self.api_key
-        return headers
+        self.mqtt_client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        if mqtt_user:
+            self.mqtt_client.username_pw_set(mqtt_user, mqtt_pass)
+        self.mqtt_client.connect(mqtt_host, mqtt_port)
+        self.mqtt_client.loop_start()
 
     def build_payload(self) -> Dict[str, Any]:
         things = self.client.fetch_things()
@@ -214,13 +191,8 @@ class Exporter:
         return payload
 
     def _format_item(self, item_name: str) -> Dict[str, Any]:
-        try:
-            item = self.client.fetch_item(item_name)
-        except requests.HTTPError as exc:
-            LOGGER.error("Failed to fetch item %s: %s", item_name, exc)
-            raise
-
-        item_payload: Dict[str, Any] = {
+        item = self.client.fetch_item(item_name)
+        item_payload = {
             "name": item.get("name"),
             "label": item.get("label"),
             "category": item.get("category"),
@@ -230,68 +202,47 @@ class Exporter:
             "tags": item.get("tags", []),
         }
 
-        state_description = item.get("stateDescription")
-        if isinstance(state_description, dict):
-            item_payload["state_description"] = {
-                "pattern": state_description.get("pattern"),
-                "read_only": state_description.get("readOnly"),
-                "options": state_description.get("options"),
-                "minimum": state_description.get("minimum"),
-                "maximum": state_description.get("maximum"),
-                "step": state_description.get("step"),
-            }
-
-        persistence_snapshot = None
-        try:
-            persistence_snapshot = self.client.fetch_persistence_snapshot(item_name)
-        except requests.HTTPError as exc:
-            LOGGER.warning("Failed to fetch persistence data for %s: %s", item_name, exc)
-
+        persistence_snapshot = self.client.fetch_persistence_snapshot(item_name)
         if persistence_snapshot:
             item_payload["persistence"] = persistence_snapshot
 
         return item_payload
 
     def send_payload(self, payload: Dict[str, Any]) -> None:
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        headers = self._build_headers()
-
-        for attempt in range(1, self.max_retries + 1):
-            try:
-                response = self.session.post(
-                    self.remote_url,
-                    headers=headers,
-                    data=data,
-                    timeout=self.timeout,
-                )
-                response.raise_for_status()
-                LOGGER.info(
-                    "Exporter delivered payload (%d things, response %s)",
-                    len(payload.get("things", [])),
-                    response.status_code,
-                )
-                return
-            except requests.RequestException as exc:
-                LOGGER.error(
-                    "Attempt %d/%d failed posting exporter payload: %s",
-                    attempt,
-                    self.max_retries,
-                    exc,
-                )
-                sleep_time = min(2 ** attempt, 60)
-                time.sleep(sleep_time)
-        LOGGER.error("Exporter unable to deliver payload after %d attempts", self.max_retries)
+        site_id = payload.get("site_id", "unknown")
+        generated_at = payload.get("generated_at")
+        
+        for thing in payload.get("things", []):
+            clean_uid = thing.get("uid", "unknown").replace(":", "_")
+            topic = f"openhab/{site_id}/devices/{clean_uid}"
+            
+            device_payload = {
+                "site_id": site_id,
+                "generated_at": generated_at,
+                "thing": thing
+            }
+            
+            data = json.dumps(device_payload, ensure_ascii=False)
+            result = self.mqtt_client.publish(topic, data, qos=1, retain=True)
+            result.wait_for_publish()
+            LOGGER.info("Published device %s to topic: %s", clean_uid, topic)
 
     def run_forever(self, run_once: bool = False) -> None:
         while True:
-            payload = self.build_payload()
-            self.send_payload(payload)
+            try:
+                payload = self.build_payload()
+                self.send_payload(payload)
 
-            if run_once:
-                return
+                if run_once:
+                    return
 
-            LOGGER.debug("Sleeping for %s seconds", self.interval)
-            time.sleep(self.interval)
+                LOGGER.debug("Sleeping for %s seconds", self.interval)
+                time.sleep(self.interval)
+            except Exception as exc:
+                LOGGER.error("Exporter loop encountered an error: %s", exc)
+                if run_once:
+                    break
+                time.sleep(10)
 
 
 def build_session(username: Optional[str], password: Optional[str], verify_tls: bool) -> Session:
@@ -322,43 +273,44 @@ def main(argv: Optional[List[str]] = None) -> int:
     _setup_logging(args.verbose)
     _handle_signals()
 
-    openhab_url = os.getenv("OPENHAB_BASE_URL", "http://oh:8080")
-    remote_url = os.getenv("EXPORTER_TARGET_URL")
-    if not remote_url:
-        LOGGER.error("EXPORTER_TARGET_URL environment variable is required")
-        return 1
-
-    site_id = _load_site_id(
-        os.getenv("SITE_ID"),
-        os.getenv("SITE_ID_FILE", _default_site_id_path()),
-    )
+    openhab_url = os.getenv("OH_BASE_URL", "http://oh:8080")
+    api_token = os.getenv("OH_TOKEN")
+    
+    site_id = _load_site_id(os.getenv("SITE_ID"))
     if not site_id:
-        LOGGER.warning("No site_id resolved; payloads will include null site_id")
-
+        LOGGER.warning("No SITE_ID found in environment.")
+    
+    mqtt_host = os.getenv("MQTT_HOST", "mqtt")  
+    mqtt_port = int(os.getenv("MQTT_PORT", "1883"))
+    mqtt_user = os.getenv("MQTT_USERNAME")     
+    mqtt_pass = os.getenv("MQTT_PASSWORD")  
+    
     interval = float(os.getenv("EXPORTER_INTERVAL_SECONDS", "300"))
-    timeout = float(os.getenv("EXPORTER_HTTP_TIMEOUT_SECONDS", "15"))
-    api_key = os.getenv("EXPORTER_API_KEY") or None
-    max_retries = int(os.getenv("EXPORTER_MAX_RETRIES", "3"))
-    openhab_timeout = float(os.getenv("OPENHAB_HTTP_TIMEOUT_SECONDS", "10"))
     persistence_service = os.getenv("OPENHAB_PERSISTENCE_SERVICE", "influxdb") or None
+
+    openhab_timeout = float(os.getenv("OPENHAB_HTTP_TIMEOUT_SECONDS", "10"))
     verify_tls_env = os.getenv("OPENHAB_TLS_VERIFY", "true").lower()
     verify_tls = verify_tls_env not in ("0", "false", "no")
 
     username = os.getenv("OPENHAB_USERNAME")
     password = os.getenv("OPENHAB_PASSWORD")
-    api_token = os.getenv("OPENHAB_API_TOKEN") or None
 
     session = build_session(username, password, verify_tls)
     client = OpenHABClient(openhab_url, session, openhab_timeout, persistence_service, api_token=api_token)
-    exporter = Exporter(site_id, client, remote_url, interval, timeout, api_key, max_retries)
+    exporter = Exporter(
+        site_id=site_id, 
+        client=client, 
+        interval=interval, 
+        mqtt_host=mqtt_host, 
+        mqtt_port=mqtt_port, 
+        mqtt_user=mqtt_user, 
+        mqtt_pass=mqtt_pass
+    )
 
     try:
         exporter.run_forever(run_once=args.once)
     except GracefulExit as exc:
         LOGGER.info("Exporter exiting gracefully: %s", exc)
-    except requests.RequestException as exc:
-        LOGGER.error("Exporter encountered an HTTP error: %s", exc)
-        return 2
     except Exception:  # noqa: BLE001
         LOGGER.exception("Unexpected exporter failure")
         return 2
