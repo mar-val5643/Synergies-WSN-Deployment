@@ -84,8 +84,8 @@ services:
   edge-agent:
     profiles: ["edge"]
     build:
-      context: .
-      dockerfile: edge_agent/Dockerfile
+      context: ./edge_agent       
+      dockerfile: Dockerfile
     container_name: edge-agent
     restart: unless-stopped
     depends_on:
