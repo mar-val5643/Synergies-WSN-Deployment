@@ -85,7 +85,7 @@ services:
     profiles: ["edge"]
     build:
       context: ./edge_agent       
-      dockerfile: Dockerfile
+      dockerfile: Dockerfile 
     container_name: edge-agent
     restart: unless-stopped
     depends_on:
@@ -123,8 +123,8 @@ services:
   openhab-exporter:
     profiles: ["edge"]
     build:
-      context: .
-      dockerfile: openhab_exporter/Dockerfile
+      context: ./openhab_exporter     
+      dockerfile: Dockerfile   
     container_name: openhab-exporter
     restart: always
     depends_on:
