@@ -1,0 +1,54 @@
+# Edge Agent Configuration
+# This file configures the edge agent service
+
+# openHAB connection settings
+openhab:
+  # Base URL of the openHAB instance
+  base_url: "http://oh:8080"
+  
+  # HTTP timeout for openHAB API requests (seconds)
+  timeout: 10
+  
+  # Authentication token (Bearer token)
+  api_token: null  # Set if openHAB requires authentication
+
+# MQTT broker settings
+mqtt:
+  # MQTT broker hostname or IP
+  broker_host: "mqtt"
+  
+  # MQTT broker port
+  broker_port: 1883
+  
+  # Use TLS (false for local broker)
+  tls: false
+  
+  # Topic prefix (matches exporter pattern)
+  topic_prefix: "openhab"
+  
+  # MQTT authentication (optional)
+  username: null
+  password: null
+  
+  # MQTT connection settings
+  keepalive: 60
+  clean_session: false
+
+# Edge Agent settings
+edge_agent:
+  # Site ID (can be set directly or loaded from file)
+  site_id: null  # Set directly here, or leave null to use site_id_file
+  
+  # Path to file containing site ID (read if site_id is null)
+  site_id_file: "/data/site/ID"
+  
+  # Telemetry interval (seconds)
+  telemetry_interval_sec: 60
+  
+  # Heartbeat interval (seconds)
+  heartbeat_interval_sec: 30
+  
+  # Cache settings
+  cache_ttl_sec: 300
+  cache_size: 1000
+
