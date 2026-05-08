@@ -15,10 +15,7 @@ if [[ ! -f "${CONFIG_ENV_FILE}" ]]; then
 fi
 source "${CONFIG_ENV_FILE}"
 
-COMPOSE_BIN="docker compose"
-if ! command -v docker compose >/dev/null 2>&1; then
-    COMPOSE_BIN="docker-compose"
-fi
+COMPOSE_BIN="/usr/bin/docker-compose"
 
 echo "Deploying Agent and Exporter for Site: ${SITE_ID}..."
 
